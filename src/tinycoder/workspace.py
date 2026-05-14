@@ -391,6 +391,18 @@ class Workspace:
 
         result = smart_replace(text, search, replace)
         if result.new_text is not None:
+            # Detect no-op edits (search == replace, or smart_replace produced
+            # text identical to the original). These waste a turn — surface
+            # the fact loudly so the small AI moves on.
+            if result.new_text == text:
+                return (
+                    f"[error] no-op edit on {rel}: the replacement produces "
+                    "the same content as the original. Either the search and "
+                    "replace strings are identical, or the change you intended "
+                    "is already in place. Re-read the file with read_file and "
+                    "either skip this edit (file is already correct → call "
+                    "finish) or construct a different edit."
+                )
             p.write_text(result.new_text, encoding="utf-8")
             suffix = "" if result.strategy == "exact" else f" [matched via {result.strategy}]"
             msg = f"edited {rel} ({len(search)} -> {len(replace)} chars){suffix}"
@@ -409,15 +421,29 @@ class Workspace:
             )
 
         closest = find_closest_block(text, search)
-        hint = (
-            f"\nClosest section in file:\n{closest}" if closest else "\n(no similar section found)"
-        )
         line_count = text.count("\n") + (0 if text.endswith("\n") or text == "" else 1)
-        rewrite_advice = (
-            " This file is small — consider write_file with the full new content instead."
-            if line_count <= 150
-            else ""
-        )
+        # For SHORT files (≤80 lines), include the full numbered file content
+        # in the error so the small AI can immediately use write_file with a
+        # correct full rewrite — instead of looping on edit_file failures.
+        # Real logs showed 3-turn loops on this exact pattern; surfacing the
+        # file directly cuts the recovery to one turn.
+        if line_count <= 80:
+            hint = (
+                "\nFULL FILE CONTENTS (file is short — write_file with corrected "
+                f"content is the right move now, NOT another edit_file):\n"
+                f"{number_lines(text)}"
+            )
+            rewrite_advice = " Switch to write_file with the full new content."
+        else:
+            hint = (
+                f"\nClosest section in file:\n{closest}"
+                if closest
+                else "\n(no similar section found)"
+            )
+            rewrite_advice = (
+                " Re-read the file with read_file first, then construct a search "
+                "block that copies lines from the file verbatim."
+            )
         raise WorkspaceError(
             f"{rel}: search block did not match (tried exact, trailing-ws, indent-normalized)."
             f"{rewrite_advice}{hint}"

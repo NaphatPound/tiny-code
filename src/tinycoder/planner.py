@@ -305,6 +305,21 @@ explicitly in the step's success_criteria so the small AI gets it right):
     but never read"). Use one canonical helper, not two near-duplicates.
   - Verification command will be `npm run build` (runs tsc), not `npm run dev`.
 
+For React + Vite + TypeScript specifically, the plan MUST schedule writes
+for the COMPLETE file set — these are NOT optional:
+    package.json (with typescript, @types/react, @types/react-dom in devDeps)
+    tsconfig.json       (compilerOptions for React + strict)
+    tsconfig.node.json  (referenced by tsconfig.json; build dies without it)
+    vite.config.ts
+    index.html          (at repo ROOT, not public/)
+    src/main.tsx
+    src/App.tsx         (contains the user's actual feature)
+    src/vite-env.d.ts   (declares Vite/React JSX types; build needs it)
+
+If you leave ANY of these out of the plan, the small AI will not create
+them and the build will fail — and a big-AI takeover round will be wasted
+just to fill the gap. Plan ALL of them explicitly.
+
 OUTPUT FORMAT — emit RAW JSON exactly in this shape (no markdown fences):
 
 {
