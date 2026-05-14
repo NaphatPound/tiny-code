@@ -432,11 +432,21 @@ class Orchestrator:
             errors: list[str] = []
             for fw in decision.files:
                 try:
-                    self.workspace.write_file(fw.path, fw.content)
-                    written.append(fw.path)
-                    self.on_event(
-                        "takeover_write", {"path": fw.path, "result": "ok"}
-                    )
+                    msg = self.workspace.write_file(fw.path, fw.content)
+                    # write_file returns "[error] ..." on soft-refusal (e.g.
+                    # _refuse_js_in_ts_src for .js in a TS project's src/).
+                    # Treat as a failed write — DON'T fire takeover_write.
+                    if msg.startswith("[error]"):
+                        errors.append(f"{fw.path}: {msg.splitlines()[0]}")
+                        self.on_event(
+                            "takeover_error",
+                            {"path": fw.path, "error": msg.splitlines()[0]},
+                        )
+                    else:
+                        written.append(fw.path)
+                        self.on_event(
+                            "takeover_write", {"path": fw.path, "result": "ok"}
+                        )
                 except WorkspaceError as e:
                     errors.append(f"{fw.path}: {e}")
                     self.on_event(
@@ -539,8 +549,16 @@ class Orchestrator:
             for fw in decision.files:
                 try:
                     msg = self.workspace.write_file(fw.path, fw.content)
-                    written.append(f"  ✓ {fw.path}")
-                    self.on_event("takeover_write", {"path": fw.path, "result": msg})
+                    if msg.startswith("[error]"):
+                        # Soft refusal (e.g. .js in TS src/). Still a failed write.
+                        written.append(f"  ✗ {fw.path}: {msg.splitlines()[0]}")
+                        self.on_event(
+                            "takeover_error",
+                            {"path": fw.path, "error": msg.splitlines()[0]},
+                        )
+                    else:
+                        written.append(f"  ✓ {fw.path}")
+                        self.on_event("takeover_write", {"path": fw.path, "result": msg})
                 except WorkspaceError as e:
                     written.append(f"  ✗ {fw.path}: {e}")
                     self.on_event("takeover_error", {"path": fw.path, "error": str(e)})
@@ -742,7 +760,13 @@ class ScaffoldOrchestrator:
         scaffold_paths: set[str] = set()
         for fw in scaffold.files:
             try:
-                self.workspace.write_file(fw.path, fw.content)
+                msg = self.workspace.write_file(fw.path, fw.content)
+                if msg.startswith("[error]"):
+                    self.on_event(
+                        "scaffold_error",
+                        {"path": fw.path, "error": msg.splitlines()[0]},
+                    )
+                    continue
                 scaffold_paths.add(fw.path)
                 self.on_event("scaffold_write", {"path": fw.path})
             except WorkspaceError as e:
@@ -899,8 +923,14 @@ class ScaffoldOrchestrator:
         if isinstance(decision, TakeoverIntervention):
             for fw in decision.files:
                 try:
-                    self.workspace.write_file(fw.path, fw.content)
-                    self.on_event("takeover_write", {"path": fw.path})
+                    msg = self.workspace.write_file(fw.path, fw.content)
+                    if msg.startswith("[error]"):
+                        self.on_event(
+                            "takeover_error",
+                            {"path": fw.path, "error": msg.splitlines()[0]},
+                        )
+                    else:
+                        self.on_event("takeover_write", {"path": fw.path})
                 except WorkspaceError as e:
                     self.on_event(
                         "takeover_error", {"path": fw.path, "error": str(e)}

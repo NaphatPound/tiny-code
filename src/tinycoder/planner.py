@@ -320,6 +320,17 @@ If you leave ANY of these out of the plan, the small AI will not create
 them and the build will fail — and a big-AI takeover round will be wasted
 just to fill the gap. Plan ALL of them explicitly.
 
+CRITICAL — package.json build script. For React+Vite+TS the build script
+MUST be:
+    "build": "tsc --noEmit && vite build"
+NEVER the older `"build": "tsc && vite build"` form. With a tsconfig.json
+that has a `references` entry (we always do — tsconfig.node.json), plain
+`tsc` runs in --build mode which IGNORES `noEmit: true` and EMITS .js
+files NEXT TO your .tsx sources. Vite's resolver then picks the emitted
+.js (which goes stale and de-syncs with .tsx) over the real .tsx — the
+app silently runs the wrong file. Use `tsc --noEmit` to type-check
+without emitting.
+
 OUTPUT FORMAT — emit RAW JSON exactly in this shape (no markdown fences):
 
 {
@@ -393,6 +404,11 @@ CRITICAL — takeover content rules:
       * tsconfig.json files referenced via `references: [{path: ...}]`
         MUST actually exist. If your takeover adds tsconfig.json, you
         MUST ALSO write the referenced tsconfig.node.json.
+      * package.json build script: prefer `"tsc --noEmit && vite build"`.
+        Plain `tsc` with a tsconfig containing `references` runs in
+        --build mode and emits .js next to .tsx (ignoring noEmit). The
+        emitted .js then shadows the .tsx via Vite's resolver. Always
+        write `--noEmit` explicitly in the build script.
   - If stale duplicate files exist (App.js next to App.tsx), include a
     `post_command` that deletes them, e.g. "rm -f src/App.js src/main.js".
     Use `find src -name '*.js' -delete` if you don't know which exactly.

@@ -186,6 +186,12 @@ def check_completeness(recipe: Recipe, root: Path) -> list[str]:
     For each required path, also accept TypeScript-variant extensions: if
     the recipe asks for `src/App.jsx` and `src/App.tsx` exists, that counts
     as satisfied.
+
+    NOTE: implemented with string slicing, NOT `Path.with_suffix("")`. The
+    `with_suffix` API only strips the LAST suffix component, so for
+    `vite.config.js` it would return `vite.config` then `.with_suffix(".ts")`
+    yields `vite.ts` (replacing `.config`!) — wrong. String slicing on the
+    actual file extension is the safe form.
     """
     missing: list[str] = []
     for f in recipe.required_files:
@@ -194,8 +200,8 @@ def check_completeness(recipe: Recipe, root: Path) -> list[str]:
         suffix = Path(f).suffix
         alt_exts = _EXTENSION_FALLBACKS.get(suffix, ())
         if alt_exts:
-            base = (root / f).with_suffix("")
-            if any(base.with_suffix(alt).exists() for alt in alt_exts):
+            stem = f[: -len(suffix)] if suffix else f
+            if any((root / (stem + alt)).exists() for alt in alt_exts):
                 continue
         missing.append(f)
     return missing
