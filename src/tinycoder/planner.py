@@ -365,6 +365,19 @@ CRITICAL — takeover content rules:
         default).
       * give every function parameter an explicit type (no implicit any).
       * useState<T>(initial) — T must allow every value in `initial`.
+      * STRICT-TSC-CLEAN: with noUnusedLocals / noUnusedParameters on,
+        every imported symbol must be referenced. Examples of frequent
+        offenders the small AI leaves behind that tsc rejects:
+          - `import React from 'react'` is not needed in react-jsx mode
+            (Vite default). Remove it unless you actually use React.*.
+          - Helper functions defined but never called — delete them.
+          - Variables declared but only set, never read — drop or use.
+      * USE-BEFORE-ASSIGNMENT: don't reference a `let` inside a loop
+        before its first assignment (`let newFood; while (...) { ... }`
+        — initialize newFood to a sentinel before the loop).
+      * tsconfig.json files referenced via `references: [{path: ...}]`
+        MUST actually exist. If your takeover adds tsconfig.json, you
+        MUST ALSO write the referenced tsconfig.node.json.
   - If stale duplicate files exist (App.js next to App.tsx), include a
     `post_command` that deletes them, e.g. "rm -f src/App.js src/main.js".
     Use `find src -name '*.js' -delete` if you don't know which exactly.

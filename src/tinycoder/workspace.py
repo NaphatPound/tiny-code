@@ -424,17 +424,43 @@ class Workspace:
         )
 
     def _framework_completeness_hint(self) -> str:
-        """If a recognized recipe is detected, report any missing required files."""
+        """If a recognized recipe is detected, report any missing required files.
+
+        In a TypeScript project, rewrite .jsx/.js paths in the suggestion to
+        their .tsx/.ts equivalents so the message doesn't actively push the
+        small AI back toward the wrong extension (it WILL follow the literal
+        path in the hint — observed in real logs).
+        """
         recipe = detect_recipe(self.root)
         if recipe is None:
             return ""
         missing = check_completeness(recipe, self.root)
         if not missing:
             return ""
+        if self._is_ts_project():
+            missing = [self._ts_rename(m) for m in missing]
         return (
             f"[framework: {recipe.name}] still missing required files: "
             f"{', '.join(missing)}. Create them before attempting to run."
         )
+
+    @staticmethod
+    def _ts_rename(path: str) -> str:
+        """Map .jsx/.js names to canonical .tsx/.ts names for TS projects.
+
+          src/App.jsx        -> src/App.tsx
+          src/util.js        -> src/util.ts
+          vite.config.js     -> vite.config.ts   (canonical in TS projects)
+          others             -> unchanged
+        """
+        p = Path(path)
+        if p.suffix == ".jsx":
+            return str(p.with_suffix(".tsx"))
+        if p.suffix == ".js":
+            norm = str(p).replace("\\", "/")
+            if norm.startswith("src/") or "/src/" in norm or norm == "vite.config.js":
+                return str(p.with_suffix(".ts"))
+        return path
 
     def run_command(self, command: str, timeout: float | None = None) -> str:
         """Run a shell command in the workspace, with smart handling for

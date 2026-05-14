@@ -287,6 +287,55 @@ class Orchestrator:
 
             # ReviewFix path: either run a cheap fix or escalate to intervention
             if fix_round >= self.max_review_rounds:
+                # FINAL RESCUE — the user's whole premise for planner-mode is
+                # "big AI guarantees a working result at the end". Even when
+                # the intervention budget is depleted, give the planner one
+                # last unbudgeted shot to fix things before we declare defeat.
+                # This is the safety net the user asked for back when they
+                # said "final step big ai can run and check it can work".
+                if not getattr(result, "_final_rescue_used", False):
+                    setattr(result, "_final_rescue_used", True)
+                    self.on_event(
+                        "intervening",
+                        {
+                            "attempt": self._intervention_count + 1,
+                            "max": "final-rescue",
+                            "situation": "review budget exhausted — last guaranteed takeover",
+                            "kind": "final_rescue",
+                        },
+                    )
+                    try:
+                        decision = self.planner.intervene(
+                            user_request=user_request,
+                            situation=(
+                                "FINAL RESCUE: review loop exhausted its budget but the "
+                                f"reviewer still wants a fix. Last issue: '{review.issue}'. "
+                                f"Last instruction: '{review.instruction}'. This is the LAST "
+                                "chance to land a working build — choose 'takeover' (write "
+                                "complete corrected files) unless the request is truly "
+                                "unrecoverable."
+                            ),
+                            recent_errors=self._recent_errors(result),
+                            workspace_listing=self.workspace.list_files("."),
+                            key_files=self._gather_key_files(),
+                            fix_attempts=fix_round,
+                        )
+                    except Exception as e:
+                        self.on_event("error", {"message": f"final rescue failed: {e}"})
+                        result.stopped_reason = (
+                            f"review still requesting fixes after {self.max_review_rounds} rounds"
+                        )
+                        return result
+                    result.interventions.append(
+                        {"attempt": "final-rescue", "kind": "final_rescue",
+                         "decision": decision.model_dump()}
+                    )
+                    self.on_event("intervention", decision.model_dump())
+                    self._apply_intervention(decision, None, None, result)
+                    if isinstance(decision, AbortIntervention):
+                        return result
+                    # Loop one more time so the reviewer sees the rescued state
+                    continue
                 result.stopped_reason = (
                     f"review still requesting fixes after {self.max_review_rounds} rounds"
                 )

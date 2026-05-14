@@ -169,6 +169,33 @@ def detect_recipe(root: Path) -> Recipe | None:
     return None
 
 
+# Required-file extensions that have legitimate TypeScript variants.
+# When a recipe asks for src/main.jsx, src/main.tsx fulfills the requirement
+# just as well — and is in fact correct for a TS project. Without this,
+# the completeness hint actively pushes the model toward the wrong extension
+# (we saw "missing src/main.jsx" in logs even when main.tsx was on disk).
+_EXTENSION_FALLBACKS = {
+    ".jsx": (".tsx",),
+    ".js": (".ts",),
+}
+
+
 def check_completeness(recipe: Recipe, root: Path) -> list[str]:
-    """Return a list of missing required files."""
-    return [f for f in recipe.required_files if not (root / f).exists()]
+    """Return a list of missing required files.
+
+    For each required path, also accept TypeScript-variant extensions: if
+    the recipe asks for `src/App.jsx` and `src/App.tsx` exists, that counts
+    as satisfied.
+    """
+    missing: list[str] = []
+    for f in recipe.required_files:
+        if (root / f).exists():
+            continue
+        suffix = Path(f).suffix
+        alt_exts = _EXTENSION_FALLBACKS.get(suffix, ())
+        if alt_exts:
+            base = (root / f).with_suffix("")
+            if any(base.with_suffix(alt).exists() for alt in alt_exts):
+                continue
+        missing.append(f)
+    return missing

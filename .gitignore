@@ -25,3 +25,6 @@ package-lock.json
 # tinycoder runtime artifacts (scratch dirs the agent writes into)
 workspace/
 logs/
+
+# Claude Code session/runtime files
+.claude/
