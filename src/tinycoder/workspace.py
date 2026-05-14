@@ -122,6 +122,26 @@ class WorkspaceError(ValueError):
     """Raised when a path escapes the workspace or another safety check fails."""
 
 
+def _validates_strictly(path: Path) -> bool:
+    """True iff write_file should pre-flight validate this file and refuse
+    the write if validation fails. We only do this for formats whose
+    validator is purely Python / stdlib (no external binary needed)
+    and reliable — so a failing validation truly means corrupt content."""
+    return path.suffix.lower() in {".json", ".py", ".toml", ".yaml", ".yml"}
+
+
+def _trim_for_history(text: str, head: int = 300, tail: int = 100) -> str:
+    """Trim long command output for LLM history. Keeps first `head` chars
+    (where the command's identifying text is) plus last `tail` chars (where
+    the conclusion usually sits) — drops the middle. Token-saver for
+    successful npm installs etc. whose middle is irrelevant noise."""
+    if not text:
+        return text
+    if len(text) <= head + tail + 60:
+        return text
+    return f"{text[:head]}\n... [trimmed {len(text) - head - tail} chars] ...\n{text[-tail:]}"
+
+
 _TS_INTENT_PATTERNS = (
     "typescript",
     " ts ",
@@ -188,12 +208,32 @@ class Workspace:
         if ts_block:
             return ts_block
         p = self._resolve(rel)
+        # Pre-flight validation: refuse the write entirely if the content
+        # fails its language validator. Writing a broken file to disk then
+        # flagging it after the fact (the old behavior) leaves the LLM with
+        # a corrupt file AND a "wrote 538 bytes" success message in history;
+        # it then tends to call `finish` thinking it succeeded. Refusing
+        # makes the next turn see a clean error and retry properly.
+        # Only applies to formats where we have a deterministic validator
+        # (JSON, TOML, YAML, Python) — JS/bash use external binaries that
+        # may not be installed and are skipped.
+        if _validates_strictly(p):
+            err = validate(p, content)
+            if err:
+                return (
+                    f"[error] refusing to write {rel!r} — content fails validation: "
+                    f"{err}. The file was NOT written; the previous version (if any) "
+                    "is unchanged. Fix the content and retry write_file."
+                )
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content, encoding="utf-8")
         msg = f"wrote {len(content)} bytes to {rel}"
         dropped = self._drop_js_sibling_for_ts(p, rel)
         if dropped:
             msg += f"\n[note] removed stale {dropped} (TS project — sibling .jsx/.js would shadow .tsx/.ts via Vite resolver)"
+        # Run validate again for formats where _validates_strictly returned
+        # False (.js / .sh need external binaries to check); these may still
+        # surface a [validation] note rather than a refusal.
         err = validate(p, content)
         if err:
             msg += f"\n[validation] {err}"
@@ -422,12 +462,14 @@ class Workspace:
 
         closest = find_closest_block(text, search)
         line_count = text.count("\n") + (0 if text.endswith("\n") or text == "" else 1)
-        # For SHORT files (≤80 lines), include the full numbered file content
+        # For files up to ~200 lines, include the full numbered file content
         # in the error so the small AI can immediately use write_file with a
         # correct full rewrite — instead of looping on edit_file failures.
         # Real logs showed 3-turn loops on this exact pattern; surfacing the
-        # file directly cuts the recovery to one turn.
-        if line_count <= 80:
+        # file directly cuts the recovery to one turn. Raised from 80 to 200
+        # because typical React component files (App.tsx with game logic)
+        # are 100-180 lines and missed the old threshold.
+        if line_count <= 200:
             hint = (
                 "\nFULL FILE CONTENTS (file is short — write_file with corrected "
                 f"content is the right move now, NOT another edit_file):\n"
@@ -531,11 +573,23 @@ class Workspace:
             return f"[command TIMEOUT after {timeout}s] command={command!r}"
         out = result.stdout or ""
         err = result.stderr or ""
-        status = "ok" if result.returncode == 0 else "FAILED"
+        success = result.returncode == 0
+        status = "ok" if success else "FAILED"
         header = f"[command {status}, exit={result.returncode}] command={command!r}"
+        # On SUCCESS, trim hard: the LLM only needs to know it worked, not
+        # the full "added 67 packages, 7 looking for funding…" noise. One
+        # iter-2 log showed npm install eating 6026 chars (79% of all result
+        # context) for nothing. On FAILURE, keep more — errors are the
+        # signal the LLM needs to fix the next turn.
+        if success:
+            out = _trim_for_history(out, head=300, tail=120)
+            err = _trim_for_history(err, head=200, tail=80)
+            cap = 2_000
+        else:
+            cap = 8_000
         body = f"{header}\n--- stdout ---\n{out}\n--- stderr ---\n{err}"
-        if len(body) > 8_000:
-            body = body[:8_000] + "\n... [truncated]"
+        if len(body) > cap:
+            body = body[:cap] + "\n... [truncated]"
         return body
 
     def _run_server_briefly(self, command: str, watch_seconds: float = 20.0) -> str:
