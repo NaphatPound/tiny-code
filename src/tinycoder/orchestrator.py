@@ -289,7 +289,12 @@ class Orchestrator:
                 "  - If the step says 'Write X', you should typically need 1\n"
                 "    action (write_file X) then finish. Two if you read first."
             )
-            exec_result = self.executor.run(step_prompt)
+            # reset_history=True: each plan step is independent; carrying
+            # step 1's full action log into step 8's LLM call wastes tokens
+            # (iter-5 XO grew history to 30+ turns by the last step). The
+            # step_prompt is self-contained, so a fresh history per step is
+            # the right scope.
+            exec_result = self.executor.run(step_prompt, reset_history=True)
             result.executor_results.append(exec_result)
             self.on_event(
                 "step_end",
@@ -441,7 +446,7 @@ class Orchestrator:
                     f"The reviewer found an issue: {fix.issue}\n"
                     f"Fix instruction: {fix.instruction}"
                 )
-                exec_result = self.executor.run(fix_prompt)
+                exec_result = self.executor.run(fix_prompt, reset_history=True)
                 result.executor_results.append(exec_result)
                 if exec_result.stopped_reason and "quit" in exec_result.stopped_reason:
                     result.stopped_reason = exec_result.stopped_reason
@@ -614,7 +619,8 @@ class Orchestrator:
             # Hand the sharper instruction back to the executor and try again.
             exec_result = self.executor.run(
                 f"[planner guidance] {decision.instruction}\n"
-                f"Why: {decision.rationale}"
+                f"Why: {decision.rationale}",
+                reset_history=True,
             )
             result.executor_results.append(exec_result)
             return "guide"
@@ -876,7 +882,7 @@ class ScaffoldOrchestrator:
                     instruction=task.instruction,
                 )
                 exec_result = self.executor.run(
-                    fill_prompt, max_steps=self.fill_max_steps
+                    fill_prompt, max_steps=self.fill_max_steps, reset_history=True
                 )
                 result.executor_results.append(exec_result)
                 self.on_event(
@@ -1015,7 +1021,8 @@ class ScaffoldOrchestrator:
 
         if isinstance(decision, GuideIntervention):
             exec_result = self.executor.run(
-                f"[planner guidance] {decision.instruction}\nWhy: {decision.rationale}"
+                f"[planner guidance] {decision.instruction}\nWhy: {decision.rationale}",
+                reset_history=True,
             )
             result.executor_results.append(exec_result)
             return self._verify(default_run_command) if default_run_command else _NO_RUN_CMD
@@ -1026,7 +1033,8 @@ class ScaffoldOrchestrator:
                 first = decision.new_steps[0]
                 exec_result = self.executor.run(
                     f"[planner replan] {first.description}\n"
-                    f"Success: {first.success_criteria or '(none)'}"
+                    f"Success: {first.success_criteria or '(none)'}",
+                    reset_history=True,
                 )
                 result.executor_results.append(exec_result)
             return self._verify(default_run_command) if default_run_command else _NO_RUN_CMD

@@ -145,13 +145,25 @@ class Agent:
     def _reset_history(self) -> None:
         self._history = [{"role": "system", "content": SYSTEM_PROMPT}, *FEW_SHOTS]
 
-    def run(self, user_request: str, max_steps: int | None = None) -> RunResult:
+    def run(
+        self,
+        user_request: str,
+        max_steps: int | None = None,
+        reset_history: bool = False,
+    ) -> RunResult:
         # Once we spot TypeScript intent (user said "typescript" / "tsx" / etc.)
         # the flag latches on for the lifetime of the workspace. This lets the
         # workspace's TS guardrails fire from turn 1 — before tsconfig.json or
         # any .tsx file exists — instead of waiting for big-AI rescue.
         if _has_ts_intent(user_request):
             self.workspace.ts_intent = True
+        # Orchestrator-driven step execution should pass reset_history=True so
+        # the LLM context doesn't carry forward irrelevant prior-step history.
+        # Each plan step is independent — its step_prompt is self-contained —
+        # so dragging step 1's full action log into step 8's call is pure
+        # token waste. Iter-5 XO grew agent history to 30+ turns by step 8.
+        if reset_history:
+            self._reset_history()
         # Refresh workspace context at the start of each turn so the LLM knows
         # what kind of project it's working in.
         project = detect_project(self.workspace.root, ts_intent=self.workspace.ts_intent)
