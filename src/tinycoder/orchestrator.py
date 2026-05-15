@@ -64,21 +64,41 @@ _STEP_PATH_RE = _re.compile(
     r"|package\.json)\b"
 )
 
-_MIN_NON_TRIVIAL_BYTES = 50  # below this, treat the file as a stub
+_MIN_NON_TRIVIAL_BYTES = 50  # below this, treat any file as a stub
+
+# Steps that mention these words almost always require substantial
+# implementation (a real feature, not just scaffolding). A 129-byte stub
+# satisfies a path-exists check but does NOT satisfy "Write App.tsx with
+# complete game logic" — so for these steps we demand a larger file size.
+_FEATURE_KEYWORDS = (
+    "complete", "full", "logic", "game", "implement", "feature",
+    "ui", "component", "handler", "function", "render",
+)
+_MIN_FEATURE_BYTES = 800  # tuned from observed game-component sizes (3-5KB)
 
 
 def _step_already_done(description: str, root) -> list[str]:
     """Return the list of paths the step would create that already exist
-    with non-trivial content. Empty list means the step is not a no-op
-    (no recognized paths, or paths aren't on disk yet)."""
+    with sufficient content for the step's intent. Empty list means the
+    step is not a no-op (no recognized paths, paths not on disk, or paths
+    too small to credibly satisfy a 'write the feature' step).
+
+    Threshold varies: scaffolding steps ("Write package.json", "Write
+    vite.config.ts") accept any non-trivial file; feature steps ("Write
+    App.tsx with complete game logic", "Write src/App.tsx with full
+    snake game") require enough bytes to plausibly contain the feature.
+    """
     paths = sorted(set(_STEP_PATH_RE.findall(description)))
     if not paths:
         return []
+    desc_lower = description.lower()
+    needs_feature = any(kw in desc_lower for kw in _FEATURE_KEYWORDS)
+    min_bytes = _MIN_FEATURE_BYTES if needs_feature else _MIN_NON_TRIVIAL_BYTES
     done: list[str] = []
     for rel in paths:
         p = root / rel
         try:
-            if p.is_file() and p.stat().st_size >= _MIN_NON_TRIVIAL_BYTES:
+            if p.is_file() and p.stat().st_size >= min_bytes:
                 done.append(rel)
         except OSError:
             pass
