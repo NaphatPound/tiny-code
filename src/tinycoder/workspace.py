@@ -242,6 +242,15 @@ class Workspace:
         deps_hint = self._check_ts_pkg_deps(p, rel, content)
         if deps_hint:
             msg += f"\n{deps_hint}"
+        # The most-repeated error across every iter log: `import React from
+        # 'react'` in a .tsx file under react-jsx mode (Vite's default) is
+        # unused and tsc kills the build with TS6133. Both small AI and big
+        # AI takeover keep writing it from training distribution. Surfacing
+        # it immediately on write means the next turn can fix it without
+        # waiting for `npm run build` to fail.
+        react_hint = self._check_unused_react_import(p, rel, content)
+        if react_hint:
+            msg += f"\n{react_hint}"
         framework_hint = self._framework_completeness_hint()
         if framework_hint:
             msg += f"\n{framework_hint}"
@@ -321,6 +330,55 @@ class Workspace:
         )
 
     _TS_REQUIRED_DEVDEPS = ("typescript", "@types/react", "@types/react-dom")
+
+    def _check_unused_react_import(self, p: Path, rel: str, content: str) -> str | None:
+        """Catch `import React from 'react'` in .tsx files when React.* isn't
+        actually used and tsconfig.json uses react-jsx mode. Vite defaults
+        to this. The unused import then fails strict tsc with TS6133 and
+        kills `npm run build`. We've seen this in 9 of 9 iter logs.
+
+        Returns a [hint] string the LLM sees on its next turn, or None.
+        Cheap-but-effective check (no AST) — looks for the import line, then
+        scans for any actual `React` usage (React., React<, <React).
+        """
+        if not p.suffix.lower() == ".tsx":
+            return None
+        if "import React" not in content:
+            return None
+        # The exact patterns to detect: `import React from 'react'` or
+        # `import React, { ... } from 'react'` — we only flag the bare
+        # default; named-only imports like `import { useState } from 'react'`
+        # are fine (no React in lhs).
+        import re as _re
+        if not _re.search(r"^\s*import\s+React(?:\s*,\s*\{[^}]*\})?\s+from\s+['\"]react['\"]", content, _re.MULTILINE):
+            return None
+        # Strip the imports section before checking usage so the import line
+        # itself doesn't count as a "use".
+        body = _re.sub(r"^\s*import[^\n]*\n", "", content, flags=_re.MULTILINE)
+        # Real usages: `React.X`, `<React.Y`, or `React<...>` (rare type form)
+        if _re.search(r"\bReact\s*[.<]", body):
+            return None
+        # Check tsconfig for react-jsx mode (Vite default). If tsconfig is
+        # missing or uses old "jsx": "react", default React import is needed.
+        ts_path = self.root / "tsconfig.json"
+        if ts_path.is_file():
+            try:
+                import json as _json
+                ts = _json.loads(ts_path.read_text(encoding="utf-8"))
+                jsx_mode = (ts.get("compilerOptions") or {}).get("jsx", "")
+            except (ValueError, OSError):
+                jsx_mode = ""
+            if jsx_mode and jsx_mode not in ("react-jsx", "react-jsxdev"):
+                # Old "react" mode actually needs the import, don't warn.
+                return None
+        return (
+            f"[hint] {rel}: `import React from 'react'` is present but React "
+            "is never referenced. Under jsx: react-jsx (Vite's default) this "
+            "import is unused and tsc strict will fail with TS6133 "
+            "(\"'React' is declared but its value is never read\"). Remove "
+            "the line — `import { useState, ... } from 'react'` for hooks "
+            "is fine, but the bare default React import is not needed."
+        )
 
     def _check_ts_pkg_deps(self, p: Path, rel: str, content: str) -> str | None:
         """If writing package.json in a TS+React project, hint about missing
