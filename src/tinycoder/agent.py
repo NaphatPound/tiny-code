@@ -164,6 +164,13 @@ class Agent:
         # token waste. Iter-5 XO grew agent history to 30+ turns by step 8.
         if reset_history:
             self._reset_history()
+        consecutive_parse_errors = 0
+        # Cap so a small model stuck on JSON escapes doesn't burn 5 minutes
+        # of max_steps before mid-step intervention kicks in. Iter 8 observed
+        # exactly this: 5 minutes wasted on a one-line vite-env.d.ts file
+        # before max_steps tripped. Two parse_errors in a row is plenty of
+        # signal to bail out and escalate.
+        PARSE_ERROR_BAIL_LIMIT = 2
         # Refresh workspace context at the start of each turn so the LLM knows
         # what kind of project it's working in.
         project = detect_project(self.workspace.root, ts_intent=self.workspace.ts_intent)
@@ -198,6 +205,7 @@ class Agent:
                 # Critical: the model often follows up by calling `finish`
                 # claiming the previous action succeeded — it did NOT, the
                 # JSON didn't parse so nothing executed. Spell that out.
+                consecutive_parse_errors += 1
                 feedback = (
                     f"[error] your previous output did not match the schema: {e}. "
                     "The action was NOT executed and the workspace is UNCHANGED. "
@@ -207,7 +215,21 @@ class Agent:
                 )
                 self._history.append({"role": "user", "content": feedback})
                 self.on_event("parse_error", {"message": str(e)})
+                # Bail out early if the model can't produce valid JSON twice
+                # in a row — usually a JSON-escape failure on multi-line file
+                # content. Let the supervisor intervene rather than burn the
+                # rest of max_steps on the same broken pattern.
+                if consecutive_parse_errors >= PARSE_ERROR_BAIL_LIMIT:
+                    result.stopped_reason = (
+                        f"executor produced unparseable output "
+                        f"{consecutive_parse_errors} times in a row — likely "
+                        "stuck on JSON escaping. Escalating to supervisor."
+                    )
+                    self.on_event("error", {"message": result.stopped_reason})
+                    return result
                 continue
+            else:
+                consecutive_parse_errors = 0
 
             action = parsed.action
             self.on_event(
