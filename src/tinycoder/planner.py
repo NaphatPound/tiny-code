@@ -412,6 +412,10 @@ CRITICAL — takeover content rules:
   - If stale duplicate files exist (App.js next to App.tsx), include a
     `post_command` that deletes them, e.g. "rm -f src/App.js src/main.js".
     Use `find src -name '*.js' -delete` if you don't know which exactly.
+  - To DELETE a file from a takeover, use `post_command` with `rm -f`.
+    NEVER attempt to delete by writing the file with empty content — the
+    workspace refuses empty writes, and even if it didn't, an empty file
+    still shadows real source files in tools/resolvers.
   - When in doubt, write the FULL set of files (App.tsx + main.tsx + the
     stragglers like vite-env.d.ts) as one takeover. The build only passes
     when the WHOLE source tree is consistent — fixing one file at a time

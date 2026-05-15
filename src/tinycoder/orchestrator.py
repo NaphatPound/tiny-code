@@ -51,6 +51,42 @@ class OrchestrationResult:
     stopped_reason: str = ""
 
 
+import re as _re
+
+# Path patterns we recognize inside a plan-step description, used to test
+# whether a step's deliverable already exists on disk. Order matters only
+# for the regex alternation — overlapping patterns are fine.
+_STEP_PATH_RE = _re.compile(
+    r"\b(?:src/[\w./-]+\.(?:tsx|ts|jsx|js|css|html)"
+    r"|tsconfig(?:\.\w+)?\.json"
+    r"|vite\.config\.(?:ts|js)"
+    r"|index\.html"
+    r"|package\.json)\b"
+)
+
+_MIN_NON_TRIVIAL_BYTES = 50  # below this, treat the file as a stub
+
+
+def _step_already_done(description: str, root) -> list[str]:
+    """Return the list of paths the step would create that already exist
+    with non-trivial content. Empty list means the step is not a no-op
+    (no recognized paths, or paths aren't on disk yet)."""
+    paths = sorted(set(_STEP_PATH_RE.findall(description)))
+    if not paths:
+        return []
+    done: list[str] = []
+    for rel in paths:
+        p = root / rel
+        try:
+            if p.is_file() and p.stat().st_size >= _MIN_NON_TRIVIAL_BYTES:
+                done.append(rel)
+        except OSError:
+            pass
+    # Only declare "step already done" if EVERY path it names is present.
+    # A step that names 2 files needs both — otherwise we'd skip work.
+    return done if len(done) == len(paths) else []
+
+
 _FAILURE_MARKERS = (
     "[command FAILED",
     "[command TIMEOUT",
@@ -192,6 +228,25 @@ class Orchestrator:
         i = 0
         while i < len(plan.steps):
             step = plan.steps[i]
+            # Step-skip: if the step's target file paths already exist with
+            # non-trivial content (e.g. step 1's small AI wrote 5 files when
+            # the planner only asked for package.json), skip this step
+            # instead of re-running the executor to redo work. Observed in
+            # iter-2 and iter-4 logs: 5 wasted no-op steps each because the
+            # small AI batch-wrote in step 1.
+            already_done_paths = _step_already_done(step.description, self.workspace.root)
+            if already_done_paths:
+                self.on_event(
+                    "step_skipped",
+                    {
+                        "index": i + 1,
+                        "total": len(plan.steps),
+                        "description": step.description,
+                        "reason": f"deliverable already exists: {', '.join(already_done_paths)}",
+                    },
+                )
+                i += 1
+                continue
             self.on_event(
                 "step_start",
                 {"index": i + 1, "total": len(plan.steps), "description": step.description},

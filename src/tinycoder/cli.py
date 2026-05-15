@@ -416,6 +416,12 @@ def _render_orchestrator_event(kind: str, payload: dict) -> None:
         color = "green" if payload["finished"] else "yellow"
         console.print(f"[{color}]{marker} step done — {payload.get('summary') or '(no summary)'}[/{color}]")
         return
+    if kind == "step_skipped":
+        console.print(
+            f"\n[dim]· step {payload['index']}/{payload['total']} SKIPPED — "
+            f"{payload['reason']}[/dim]"
+        )
+        return
     if kind == "auto_run":
         console.print(f"[magenta]◆ auto-verify:[/magenta] [yellow]$ {payload['command']}[/yellow]")
         return
